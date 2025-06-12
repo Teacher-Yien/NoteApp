@@ -1,0 +1,332 @@
+-- =============================================
+-- Notes Application Database Schema
+-- SQL Server Database Creation Script
+-- =============================================
+
+-- Create Database
+CREATE DATABASE NotesApp;
+GO
+
+USE NotesApp;
+GO
+
+
+
+-- Create Users table with Role column
+CREATE TABLE Users (
+    Id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    Username NVARCHAR(50) NOT NULL UNIQUE,
+    Email NVARCHAR(100) NOT NULL UNIQUE,
+    PasswordHash NVARCHAR(255) NOT NULL,
+    FirstName NVARCHAR(50) NULL,
+    LastName NVARCHAR(50) NULL,
+    Role INT NOT NULL DEFAULT 1, -- 1 = User, 2 = Admin
+    CreatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    UpdatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    IsActive BIT NOT NULL DEFAULT 1
+);
+
+-- Create Notes table
+CREATE TABLE Notes (
+    Id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    UserId UNIQUEIDENTIFIER NOT NULL FOREIGN KEY REFERENCES Users(Id),
+    Title NVARCHAR(200) NOT NULL,
+    Content NVARCHAR(MAX) NULL,
+    CreatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    UpdatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+);
+
+-- Create indexes
+CREATE INDEX IX_Users_Username ON Users(Username);
+CREATE INDEX IX_Users_Email ON Users(Email);
+CREATE INDEX IX_Notes_UserId ON Notes(UserId);
+CREATE INDEX IX_Notes_CreatedAt ON Notes(CreatedAt);
+
+-- Insert default admin user (password: "admin123")
+INSERT INTO Users (Username, Email, PasswordHash, FirstName, LastName, Role)
+VALUES ('admin', 'admin@example.com', 'jGl25bVBBBW96Qi9Te4V37Fnqchz/Eu4qB9vKrRIqRg=', 'Admin', 'User', 2);
+
+-- Stored Procedures
+
+-- 1. Create User
+IF OBJECT_ID('sp_CreateUser', 'P') IS NOT NULL
+    DROP PROCEDURE sp_CreateUser;
+GO
+
+CREATE PROCEDURE sp_CreateUser
+    @Username NVARCHAR(50),
+    @Email NVARCHAR(100),
+    @PasswordHash NVARCHAR(255),
+    @FirstName NVARCHAR(50) = NULL,
+    @LastName NVARCHAR(50) = NULL,
+    @Role INT = 1
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @Id UNIQUEIDENTIFIER = NEWID();
+    
+    INSERT INTO Users (Id, Username, Email, PasswordHash, FirstName, LastName, Role)
+    VALUES (@Id, @Username, @Email, @PasswordHash, @FirstName, @LastName, @Role);
+    
+    SELECT Id, Username, Email, FirstName, LastName, Role, CreatedAt, UpdatedAt, IsActive
+    FROM Users
+    WHERE Id = @Id;
+END;
+GO
+
+-- 2. Get User by Credentials
+IF OBJECT_ID('sp_GetUserByCredentials', 'P') IS NOT NULL
+    DROP PROCEDURE sp_GetUserByCredentials;
+GO
+
+CREATE PROCEDURE sp_GetUserByCredentials
+    @UsernameOrEmail NVARCHAR(100)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    SELECT Id, Username, Email, PasswordHash, FirstName, LastName, Role, CreatedAt, UpdatedAt, IsActive
+    FROM Users
+    WHERE (Username = @UsernameOrEmail OR Email = @UsernameOrEmail) AND IsActive = 1;
+END;
+GO
+
+-- 3. Create Note
+IF OBJECT_ID('sp_CreateNote', 'P') IS NOT NULL
+    DROP PROCEDURE sp_CreateNote;
+GO
+
+CREATE PROCEDURE sp_CreateNote
+    @UserId UNIQUEIDENTIFIER,
+    @Title NVARCHAR(200),
+    @Content NVARCHAR(MAX) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @Id UNIQUEIDENTIFIER = NEWID();
+    
+    INSERT INTO Notes (Id, UserId, Title, Content)
+    VALUES (@Id, @UserId, @Title, @Content);
+    
+    SELECT Id, UserId, Title, Content, CreatedAt, UpdatedAt
+    FROM Notes
+    WHERE Id = @Id;
+END;
+GO
+
+-- 4. Get User Notes (supports admin access)
+IF OBJECT_ID('sp_GetUserNotes', 'P') IS NOT NULL
+    DROP PROCEDURE sp_GetUserNotes;
+GO
+
+CREATE PROCEDURE sp_GetUserNotes
+    @UserId UNIQUEIDENTIFIER,
+    @SearchTerm NVARCHAR(200) = NULL,
+    @SortBy NVARCHAR(50) = 'CreatedAt',
+    @SortOrder NVARCHAR(4) = 'DESC',
+    @PageNumber INT = 1,
+    @PageSize INT = 50,
+    @IsAdmin BIT = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @Offset INT = (@PageNumber - 1) * @PageSize;
+    
+    SELECT n.Id, n.UserId, n.Title, n.Content, n.CreatedAt, n.UpdatedAt,
+           u.Username as CreatedByUsername
+    FROM Notes n
+    INNER JOIN Users u ON n.UserId = u.Id
+    WHERE (@IsAdmin = 1 OR n.UserId = @UserId)
+      AND (@SearchTerm IS NULL OR n.Title LIKE '%' + @SearchTerm + '%' OR n.Content LIKE '%' + @SearchTerm + '%')
+    ORDER BY 
+        CASE WHEN @SortBy = 'Title' AND @SortOrder = 'ASC' THEN n.Title END ASC,
+        CASE WHEN @SortBy = 'Title' AND @SortOrder = 'DESC' THEN n.Title END DESC,
+        CASE WHEN @SortBy = 'CreatedAt' AND @SortOrder = 'ASC' THEN n.CreatedAt END ASC,
+        CASE WHEN @SortBy = 'CreatedAt' AND @SortOrder = 'DESC' THEN n.CreatedAt END DESC,
+        CASE WHEN @SortBy = 'UpdatedAt' AND @SortOrder = 'ASC' THEN n.UpdatedAt END ASC,
+        CASE WHEN @SortBy = 'UpdatedAt' AND @SortOrder = 'DESC' THEN n.UpdatedAt END DESC
+    OFFSET @Offset ROWS
+    FETCH NEXT @PageSize ROWS ONLY;
+END;
+GO
+
+-- 5. Get All Notes (Admin only)
+IF OBJECT_ID('sp_GetAllNotes', 'P') IS NOT NULL
+    DROP PROCEDURE sp_GetAllNotes;
+GO
+
+CREATE PROCEDURE sp_GetAllNotes
+    @SearchTerm NVARCHAR(200) = NULL,
+    @SortBy NVARCHAR(50) = 'CreatedAt',
+    @SortOrder NVARCHAR(4) = 'DESC',
+    @PageNumber INT = 1,
+    @PageSize INT = 50,
+    @FilterUserId UNIQUEIDENTIFIER = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @Offset INT = (@PageNumber - 1) * @PageSize;
+    
+    SELECT n.Id, n.UserId, n.Title, n.Content, n.CreatedAt, n.UpdatedAt,
+           u.Username as CreatedByUsername
+    FROM Notes n
+    INNER JOIN Users u ON n.UserId = u.Id
+    WHERE (@SearchTerm IS NULL OR n.Title LIKE '%' + @SearchTerm + '%' OR n.Content LIKE '%' + @SearchTerm + '%')
+      AND (@FilterUserId IS NULL OR n.UserId = @FilterUserId)
+    ORDER BY 
+        CASE WHEN @SortBy = 'Title' AND @SortOrder = 'ASC' THEN n.Title END ASC,
+        CASE WHEN @SortBy = 'Title' AND @SortOrder = 'DESC' THEN n.Title END DESC,
+        CASE WHEN @SortBy = 'CreatedAt' AND @SortOrder = 'ASC' THEN n.CreatedAt END ASC,
+        CASE WHEN @SortBy = 'CreatedAt' AND @SortOrder = 'DESC' THEN n.CreatedAt END DESC,
+        CASE WHEN @SortBy = 'UpdatedAt' AND @SortOrder = 'ASC' THEN n.UpdatedAt END ASC,
+        CASE WHEN @SortBy = 'UpdatedAt' AND @SortOrder = 'DESC' THEN n.UpdatedAt END DESC
+    OFFSET @Offset ROWS
+    FETCH NEXT @PageSize ROWS ONLY;
+END;
+GO
+
+-- 6. Get Note by ID (supports admin access)
+IF OBJECT_ID('sp_GetNoteById', 'P') IS NOT NULL
+    DROP PROCEDURE sp_GetNoteById;
+GO
+
+CREATE PROCEDURE sp_GetNoteById
+    @NoteId UNIQUEIDENTIFIER,
+    @UserId UNIQUEIDENTIFIER,
+    @IsAdmin BIT = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    SELECT n.Id, n.UserId, n.Title, n.Content, n.CreatedAt, n.UpdatedAt,
+           u.Username as CreatedByUsername
+    FROM Notes n
+    INNER JOIN Users u ON n.UserId = u.Id
+    WHERE n.Id = @NoteId
+      AND (@IsAdmin = 1 OR n.UserId = @UserId);
+END;
+GO
+
+-- 7. Update Note (supports admin access)
+IF OBJECT_ID('sp_UpdateNote', 'P') IS NOT NULL
+    DROP PROCEDURE sp_UpdateNote;
+GO
+
+CREATE PROCEDURE sp_UpdateNote
+    @NoteId UNIQUEIDENTIFIER,
+    @UserId UNIQUEIDENTIFIER,
+    @Title NVARCHAR(200),
+    @Content NVARCHAR(MAX) = NULL,
+    @IsAdmin BIT = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    UPDATE Notes
+    SET Title = @Title,
+        Content = @Content,
+        UpdatedAt = GETUTCDATE()
+    WHERE Id = @NoteId
+      AND (@IsAdmin = 1 OR UserId = @UserId);
+    
+    IF @@ROWCOUNT > 0
+    BEGIN
+        SELECT n.Id, n.UserId, n.Title, n.Content, n.CreatedAt, n.UpdatedAt,
+               u.Username as CreatedByUsername
+        FROM Notes n
+        INNER JOIN Users u ON n.UserId = u.Id
+        WHERE n.Id = @NoteId;
+    END
+    ELSE
+    BEGIN
+        -- Return empty result with default GUID to indicate not found
+        SELECT CAST('00000000-0000-0000-0000-000000000000' AS UNIQUEIDENTIFIER) as Id,
+               CAST('00000000-0000-0000-0000-000000000000' AS UNIQUEIDENTIFIER) as UserId,
+               CAST('' AS NVARCHAR(200)) as Title,
+               CAST(NULL AS NVARCHAR(MAX)) as Content,
+               CAST('1900-01-01' AS DATETIME2) as CreatedAt,
+               CAST('1900-01-01' AS DATETIME2) as UpdatedAt,
+               CAST('' AS NVARCHAR(50)) as CreatedByUsername
+        WHERE 1 = 0; -- This ensures no rows are returned
+    END
+END;
+GO
+
+-- 8. Delete Note (supports admin access)
+IF OBJECT_ID('sp_DeleteNote', 'P') IS NOT NULL
+    DROP PROCEDURE sp_DeleteNote;
+GO
+
+CREATE PROCEDURE sp_DeleteNote
+    @NoteId UNIQUEIDENTIFIER,
+    @UserId UNIQUEIDENTIFIER,
+    @IsAdmin BIT = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DELETE FROM Notes
+    WHERE Id = @NoteId
+      AND (@IsAdmin = 1 OR UserId = @UserId);
+    
+    SELECT @@ROWCOUNT as AffectedRows;
+END;
+GO
+
+-- 9. Get All Users (Admin only)
+IF OBJECT_ID('sp_GetAllUsers', 'P') IS NOT NULL
+    DROP PROCEDURE sp_GetAllUsers;
+GO
+
+CREATE PROCEDURE sp_GetAllUsers
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    SELECT Id, Username, Email, FirstName, LastName, Role, CreatedAt, UpdatedAt, IsActive
+    FROM Users
+    ORDER BY CreatedAt DESC;
+END;
+GO
+
+-- 10. Update User Role (Admin only)
+IF OBJECT_ID('sp_UpdateUserRole', 'P') IS NOT NULL
+    DROP PROCEDURE sp_UpdateUserRole;
+GO
+
+CREATE PROCEDURE sp_UpdateUserRole
+    @UserId UNIQUEIDENTIFIER,
+    @Role INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    UPDATE Users
+    SET Role = @Role,
+        UpdatedAt = GETUTCDATE()
+    WHERE Id = @UserId;
+    
+    SELECT @@ROWCOUNT as AffectedRows;
+END;
+GO
+
+-- Sample data for testing
+INSERT INTO Users (Username, Email, PasswordHash, FirstName, LastName, Role)
+VALUES 
+    ('john_doe', 'john@example.com', 'jGl25bVBBBW96Qi9Te4V37Fnqchz/Eu4qB9vKrRIqRg=', 'John', 'Doe', 1),
+    ('jane_smith', 'jane@example.com', 'jGl25bVBBBBW96Qi9Te4V37Fnqchz/Eu4qB9vKrRIqRg=', 'Jane', 'Smith', 1);
+
+-- Sample notes
+DECLARE @JohnId UNIQUEIDENTIFIER = (SELECT Id FROM Users WHERE Username = 'john_doe');
+DECLARE @JaneId UNIQUEIDENTIFIER = (SELECT Id FROM Users WHERE Username = 'jane_smith');
+
+INSERT INTO Notes (UserId, Title, Content)
+VALUES 
+    (@JohnId, 'My First Note', 'This is John''s first note content'),
+    (@JohnId, 'Shopping List', 'Milk, Eggs, Bread, Cheese'),
+    (@JaneId, 'Meeting Notes', 'Project discussion with team'),
+    (@JaneId, 'Ideas', 'New feature ideas for the application');

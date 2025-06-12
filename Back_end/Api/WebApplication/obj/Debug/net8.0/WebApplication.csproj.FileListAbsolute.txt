@@ -1,0 +1,5 @@
+D:\ProjectTeachbodai\Back_end\Api\WebApplication\obj\Debug\net8.0\WebApplication.GeneratedMSBuildEditorConfig.editorconfig
+D:\ProjectTeachbodai\Back_end\Api\WebApplication\obj\Debug\net8.0\WebApplication.AssemblyInfoInputs.cache
+D:\ProjectTeachbodai\Back_end\Api\WebApplication\obj\Debug\net8.0\WebApplication.AssemblyInfo.cs
+D:\ProjectTeachbodai\Back_end\Api\WebApplication\obj\Debug\net8.0\WebApplication.csproj.CoreCompileInputs.cache
+D:\ProjectTeachbodai\Back_end\Api\WebApplication\obj\Debug\net8.0\WebApplication.MvcApplicationPartsAssemblyInfo.cache
