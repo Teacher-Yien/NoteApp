@@ -20,6 +20,8 @@ type SocialProvider = 'google' | 'twitter'
 // Reactive state
 const activeTab = ref<ActiveTab>('signin')
 const showPassword = ref<boolean>(false)
+const loading = ref<boolean>(false)
+const error = ref<string>('')
 
 // Form data
 const loginForm = ref<LoginForm>({
@@ -34,20 +36,140 @@ const signUpForm = ref<SignUpForm>({
   password: ''
 })
 
-// Methods
-const signIn = (): void => {
-  console.log('Sign in:', loginForm.value)
-  alert('Sign in functionality would be implemented here!')
+// API Base URL - Update this to match your backend
+const API_BASE_URL = 'http://localhost:5077/api'
+
+// Utility function for API calls
+const apiCall = async (endpoint: string, options: RequestInit = {}) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...options.headers
+      },
+      ...options
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    return await response.json()
+  } catch (err) {
+    console.error('API call failed:', err)
+    throw err
+  }
 }
 
-const signUp = (): void => {
-  console.log('Sign up:', signUpForm.value)
-  alert('Sign up functionality would be implemented here!')
+// Define emits
+const emit = defineEmits<{
+  'login-success': [userData: any]
+}>()
+
+// Methods
+const signIn = async (): Promise<void> => {
+  if (!loginForm.value.email || !loginForm.value.password) {
+    error.value = 'Please fill in all required fields'
+    return
+  }
+
+  loading.value = true
+  error.value = ''
+
+  try {
+    const response = await apiCall('/Auth/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: loginForm.value.email,
+        password: loginForm.value.password,
+        rememberMe: loginForm.value.rememberMe
+      })
+    })
+
+    console.log('Sign in successful:', response)
+    
+    // Store token if provided
+    if (response.token) {
+      localStorage.setItem('authToken', response.token)
+    }
+    
+    // Emit login success event to parent component
+    emit('login-success', {
+      email: loginForm.value.email,
+      token: response.token,
+      ...response.user // Include any other user data from response
+    })
+    
+  } catch (err) {
+    error.value = 'Invalid email or password. Please try again.'
+    console.error('Sign in error:', err)
+  } finally {
+    loading.value = false
+  }
+}
+
+const signUp = async (): Promise<void> => {
+  if (!signUpForm.value.fullName || !signUpForm.value.email || !signUpForm.value.password) {
+    error.value = 'Please fill in all required fields'
+    return
+  }
+
+  if (signUpForm.value.password.length < 6) {
+    error.value = 'Password must be at least 6 characters long'
+    return
+  }
+
+  loading.value = true
+  error.value = ''
+
+  try {
+    const response = await apiCall('/Auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        fullName: signUpForm.value.fullName,
+        email: signUpForm.value.email,
+        password: signUpForm.value.password
+      })
+    })
+
+    console.log('Sign up successful:', response)
+    
+    // Option 1: Auto-login after registration
+    if (response.token) {
+      localStorage.setItem('authToken', response.token)
+      emit('login-success', {
+        email: signUpForm.value.email,
+        fullName: signUpForm.value.fullName,
+        token: response.token,
+        ...response.user
+      })
+    } else {
+      // Option 2: Show success message and switch to sign in
+      alert('Account created successfully! Please sign in.')
+      switchTab('signin')
+    }
+    
+  } catch (err) {
+    error.value = 'Registration failed. Please try again.'
+    console.error('Sign up error:', err)
+  } finally {
+    loading.value = false
+  }
 }
 
 const socialLogin = (provider: SocialProvider): void => {
-  console.log('Social login with:', provider)
-  alert(`${provider} login would be implemented here!`)
+  loading.value = true
+  error.value = ''
+
+  try {
+    // Redirect to social auth endpoint
+    window.location.href = `${API_BASE_URL}/Auth/${provider}`
+  } catch (err) {
+    error.value = `${provider} login failed. Please try again.`
+    console.error('Social login error:', err)
+    loading.value = false
+  }
 }
 
 const togglePasswordVisibility = (): void => {
@@ -57,6 +179,14 @@ const togglePasswordVisibility = (): void => {
 const switchTab = (tab: ActiveTab): void => {
   activeTab.value = tab
   showPassword.value = false
+  error.value = ''
+}
+
+// Clear error when user starts typing
+const clearError = (): void => {
+  if (error.value) {
+    error.value = ''
+  }
 }
 </script>
 
@@ -71,6 +201,11 @@ const switchTab = (tab: ActiveTab): void => {
 
       <!-- Login Card -->
       <div class="w-full max-w-md bg-white/10 backdrop-blur-lg rounded-3xl p-8 shadow-2xl border border-white/20">
+        <!-- Error Message -->
+        <div v-if="error" class="mb-6 p-4 bg-red-500/20 border border-red-500/30 rounded-2xl">
+          <p class="text-red-200 text-sm">{{ error }}</p>
+        </div>
+
         <!-- Tab Navigation -->
         <div class="flex mb-8">
           <button 
@@ -79,6 +214,7 @@ const switchTab = (tab: ActiveTab): void => {
               'flex-1 py-3 px-6 rounded-full font-medium transition-all duration-200 mr-2',
               activeTab === 'signin' ? 'bg-white text-purple-700' : 'text-white hover:bg-white/10'
             ]"
+            :disabled="loading"
           >
             Sign In
           </button>
@@ -88,6 +224,7 @@ const switchTab = (tab: ActiveTab): void => {
               'flex-1 py-3 px-6 rounded-full font-medium transition-all duration-200',
               activeTab === 'signup' ? 'bg-white text-purple-700' : 'text-white hover:bg-white/10'
             ]"
+            :disabled="loading"
           >
             Sign Up
           </button>
@@ -109,6 +246,8 @@ const switchTab = (tab: ActiveTab): void => {
               placeholder="Email address"
               class="w-full px-4 py-4 bg-white/10 border border-white/20 rounded-2xl text-white placeholder-white/70 focus:outline-none focus:ring-2 focus:ring-white/50 focus:border-transparent transition-all duration-200"
               required
+              :disabled="loading"
+              @input="clearError"
             >
           </div>
           
@@ -119,11 +258,14 @@ const switchTab = (tab: ActiveTab): void => {
               placeholder="Password"
               class="w-full px-4 py-4 bg-white/10 border border-white/20 rounded-2xl text-white placeholder-white/70 focus:outline-none focus:ring-2 focus:ring-white/50 focus:border-transparent transition-all duration-200 pr-12"
               required
+              :disabled="loading"
+              @input="clearError"
             >
             <button 
               type="button"
               @click="togglePasswordVisibility"
               class="absolute right-4 top-1/2 transform -translate-y-1/2 text-white/70 hover:text-white transition-colors"
+              :disabled="loading"
             >
               <!-- Eye Open Icon -->
               <svg v-if="!showPassword" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -143,6 +285,7 @@ const switchTab = (tab: ActiveTab): void => {
                 v-model="loginForm.rememberMe"
                 type="checkbox" 
                 class="mr-2 rounded border-white/30 bg-white/10 text-purple-600 focus:ring-purple-500 focus:ring-offset-0"
+                :disabled="loading"
               >
               Remember me
             </label>
@@ -153,9 +296,10 @@ const switchTab = (tab: ActiveTab): void => {
 
           <button 
             type="submit"
-            class="w-full bg-white text-purple-700 py-4 rounded-2xl font-semibold hover:bg-white/90 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98]"
+            class="w-full bg-white text-purple-700 py-4 rounded-2xl font-semibold hover:bg-white/90 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+            :disabled="loading"
           >
-            Sign In
+            {{ loading ? 'Signing In...' : 'Sign In' }}
           </button>
         </form>
 
@@ -168,6 +312,8 @@ const switchTab = (tab: ActiveTab): void => {
               placeholder="Full name"
               class="w-full px-4 py-4 bg-white/10 border border-white/20 rounded-2xl text-white placeholder-white/70 focus:outline-none focus:ring-2 focus:ring-white/50 focus:border-transparent transition-all duration-200"
               required
+              :disabled="loading"
+              @input="clearError"
             >
           </div>
           
@@ -178,6 +324,8 @@ const switchTab = (tab: ActiveTab): void => {
               placeholder="Email address"
               class="w-full px-4 py-4 bg-white/10 border border-white/20 rounded-2xl text-white placeholder-white/70 focus:outline-none focus:ring-2 focus:ring-white/50 focus:border-transparent transition-all duration-200"
               required
+              :disabled="loading"
+              @input="clearError"
             >
           </div>
           
@@ -185,14 +333,18 @@ const switchTab = (tab: ActiveTab): void => {
             <input 
               v-model="signUpForm.password"
               :type="showPassword ? 'text' : 'password'"
-              placeholder="Password"
+              placeholder="Password (min 6 characters)"
               class="w-full px-4 py-4 bg-white/10 border border-white/20 rounded-2xl text-white placeholder-white/70 focus:outline-none focus:ring-2 focus:ring-white/50 focus:border-transparent transition-all duration-200 pr-12"
               required
+              minlength="6"
+              :disabled="loading"
+              @input="clearError"
             >
             <button 
               type="button"
               @click="togglePasswordVisibility"
               class="absolute right-4 top-1/2 transform -translate-y-1/2 text-white/70 hover:text-white transition-colors"
+              :disabled="loading"
             >
               <!-- Eye Open Icon -->
               <svg v-if="!showPassword" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -208,9 +360,10 @@ const switchTab = (tab: ActiveTab): void => {
 
           <button 
             type="submit"
-            class="w-full bg-white text-purple-700 py-4 rounded-2xl font-semibold hover:bg-white/90 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98]"
+            class="w-full bg-white text-purple-700 py-4 rounded-2xl font-semibold hover:bg-white/90 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+            :disabled="loading"
           >
-            Create Account
+            {{ loading ? 'Creating Account...' : 'Create Account' }}
           </button>
         </form>
 
@@ -229,7 +382,8 @@ const switchTab = (tab: ActiveTab): void => {
             <button 
               @click="socialLogin('google')"
               type="button"
-              class="flex items-center justify-center px-4 py-3 bg-white/10 border border-white/20 rounded-2xl text-white hover:bg-white/20 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98]"
+              class="flex items-center justify-center px-4 py-3 bg-white/10 border border-white/20 rounded-2xl text-white hover:bg-white/20 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+              :disabled="loading"
             >
               <!-- Google Icon -->
               <svg class="w-5 h-5 mr-2" viewBox="0 0 24 24">
@@ -244,7 +398,8 @@ const switchTab = (tab: ActiveTab): void => {
             <button 
               @click="socialLogin('twitter')"
               type="button"
-              class="flex items-center justify-center px-4 py-3 bg-white/10 border border-white/20 rounded-2xl text-white hover:bg-white/20 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98]"
+              class="flex items-center justify-center px-4 py-3 bg-white/10 border border-white/20 rounded-2xl text-white hover:bg-white/20 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+              :disabled="loading"
             >
               <!-- Twitter Icon -->
               <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24">
@@ -291,6 +446,11 @@ input[type="checkbox"]:checked::after {
 input[type="checkbox"]:focus {
   outline: none;
   box-shadow: 0 0 0 2px rgba(147, 51, 234, 0.5);
+}
+
+input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Custom scrollbar for the container if needed */
